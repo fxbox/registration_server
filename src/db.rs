@@ -18,8 +18,8 @@ fn get_db_environment() -> String {
 #[derive(RustcEncodable, Debug)]
 pub struct Record {
     pub public_ip: String,
-    pub local_ip: String,
-    pub tunnel_url: Option<String>,
+    pub domain:    String,
+    pub tunnel_configured: bool,
     pub timestamp: i64 // i64 because of the database type.
 }
 
@@ -30,7 +30,7 @@ fn escape(string: &str) -> String {
 
 pub enum FindFilter {
     PublicIp(String),
-    PublicAndLocalIp(String, String)
+    PublicIpAndFingerprintDomain(String, String)
 }
 
 pub struct Db {
@@ -46,8 +46,8 @@ impl Db {
         let connection = Connection::open(get_db_environment()).unwrap();
         connection.execute("CREATE TABLE IF NOT EXISTS boxes (
                 public_ip TEXT NOT NULL,
-                local_ip  TEXT NOT NULL,
-                tunnel_url TEXT,
+                domain TEXT,
+                tunnel_configured INTEGER,
                 timestamp INTEGER
             )", &[]).unwrap();
 
@@ -80,11 +80,11 @@ impl Db {
                 );
                 try!(stmt.query(&[&escape(&public_ip)]))
             },
-            FindFilter::PublicAndLocalIp(public_ip, local_ip) => {
+            FindFilter::PublicIpAndFingerprintDomain(public_ip, domain) => {
                 stmt = try!(
-                    self.connection.prepare("SELECT * FROM boxes WHERE (public_ip=$1 and local_ip=$2)")
+                    self.connection.prepare("SELECT * FROM boxes WHERE (public_ip=$1 and domain=$2)")
                 );
-                try!(stmt.query(&[&escape(&public_ip), &escape(&local_ip)]))
+                try!(stmt.query(&[&escape(&public_ip), &escape(&domain)]))
             }
         };
 
@@ -93,8 +93,8 @@ impl Db {
             let row = try!(result_row);
             records.push(Record {
                 public_ip: row.get(0),
-                local_ip: row.get(1),
-                tunnel_url: row.get(2),
+                domain: row.get(1),
+                tunnel_configured: row.get(2),
                 timestamp: row.get(3)
             });
         }
@@ -103,17 +103,18 @@ impl Db {
 
     pub fn update(&self, record: Record) -> rusqlite::Result<i32> {
         self.connection.execute("UPDATE boxes
-            SET public_ip=$1, local_ip=$2, tunnel_url=$3, timestamp=$4
-            WHERE (public_ip=$5 AND local_ip=$6)",
-            &[&record.public_ip, &record.local_ip, &record.tunnel_url,
-              &record.timestamp, &record.public_ip, &record.local_ip])
+            SET public_ip=$1, domain=$2, tunnel_configured=$3 timestamp=$4
+            WHERE (public_ip=$5 AND domain=$6)",
+            &[&record.public_ip, &record.domain, &bool_as_int(&record.tunnel_configured), &record.timestamp,
+              &record.public_ip, &record.domain])
     }
 
     pub fn add(&self, record: Record) -> rusqlite::Result<i32> {
         self.connection.execute("INSERT INTO boxes
-            (public_ip, local_ip, tunnel_url, timestamp)
+            (public_ip, domain, tunnel_configured, timestamp)
             VALUES ($1, $2, $3, $4)",
-            &[&record.public_ip, &record.local_ip, &record.tunnel_url,
+            &[&record.public_ip, &record.domain,
+            &bool_as_int(&record.tunnel_configured),
             &record.timestamp])
     }
 
@@ -122,12 +123,17 @@ impl Db {
     }
 }
 
+// Used to store a boolean as an INTEGER in sqlite
+fn bool_as_int(value: &bool) -> i32 {
+    if *value { 1 } else { 0 }
+}
+
 #[test]
 fn test_db() {
     let db = Db::new();
 
     // Look for a record, but the db is empty.
-    match db.find(FindFilter::PublicAndLocalIp("127.0.0.1".to_owned(), "10.0.0.1".to_owned())) {
+    match db.find(FindFilter::PublicIpAndFingerprintDomain("127.0.0.1".to_owned(), "<fingerprint>.knilxof.org".to_owned())) {
         Ok(vec) => { assert!(vec.is_empty()); },
         Err(err) => { println!("Unexpected error: {}", err); assert!(false); }
     }
@@ -135,8 +141,8 @@ fn test_db() {
 
     let mut r = Record {
         public_ip: "127.0.0.1".to_owned(),
-        local_ip: "10.0.0.1".to_owned(),
-        tunnel_url: Some("https://foo.bar.com".to_owned()),
+        domain: "<fingerprint>.knilxof.org".to_owned(),
+        tunnel_configured: false,
         timestamp: now
     };
 
@@ -146,7 +152,7 @@ fn test_db() {
         Err(err) => { println!("Unexpected error: {}", err); assert!(false); }
     }
     // Check that we find it.
-    match db.find(FindFilter::PublicAndLocalIp("127.0.0.1".to_owned(), "10.0.0.1".to_owned())) {
+    match db.find(FindFilter::PublicIpAndFingerprintDomain("127.0.0.1".to_owned(), "<fingerprint>.knilxof.org".to_owned())) {
         Ok(records) => {
             assert_eq!(records.len(), 1);
             assert_eq!(records[0].timestamp, now);
@@ -157,8 +163,8 @@ fn test_db() {
     // Add another record with the same public IP, but a different local one.
     r = Record {
         public_ip: "127.0.0.1".to_owned(),
-        local_ip: "10.0.0.2".to_owned(),
-        tunnel_url: None,
+        domain: "<another_fingerprint>.knilxof.org".to_owned(),
+        tunnel_configured: true,
         timestamp: now
     };
     match db.add(r) {
@@ -170,10 +176,10 @@ fn test_db() {
     match db.find(FindFilter::PublicIp("127.0.0.1".to_owned())) {
         Ok(records) => {
             assert_eq!(records.len(), 2);
-            assert_eq!(records[0].local_ip, "10.0.0.1");
-            assert_eq!(records[1].local_ip, "10.0.0.2");
-            assert_eq!(records[0].tunnel_url.clone().unwrap(), "https://foo.bar.com");
-            assert_eq!(records[1].tunnel_url, None);
+            assert_eq!(records[0].domain, "<fingerprint>.knilxof.org");
+            assert_eq!(records[0].tunnel_configured, false);
+            assert_eq!(records[1].domain, "<another_fingerprint>.knilxof.org");
+            assert_eq!(records[1].tunnel_configured, true);
         },
         Err(err) => { println!("Unexpected error: {}", err); assert!(false); }
     }

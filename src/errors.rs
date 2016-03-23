@@ -53,8 +53,8 @@ pub fn from_decoder_error(error: json::DecoderError) -> IronResult<Response> {
     match error {
         json::DecoderError::MissingFieldError(field) => {
             let errno = match field.as_ref() {
-                "local_ip" => 100,
-                "tunnel_url" => 101,
+                "domain" => 100,
+                "tunnel_configured" => 101,
                 _ => 400
             };
             EndpointError::with(status::BadRequest, errno)

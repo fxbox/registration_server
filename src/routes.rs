@@ -27,11 +27,12 @@ impl Error for StringError {
 }
 
 fn register(req: &mut Request) -> IronResult<Response> {
-   // Get the local IP and optional tunnel url from the body,
+   // Get the public ip and domain from the body,
     #[derive(RustcDecodable, Debug)]
     struct RegisterBody {
-        local_ip: String,
-        tunnel_url: Option<String>,
+        public_ip: String,
+        domain: String,
+        tunnel_configured: bool
     }
 
     let mut payload = String::new();
@@ -44,31 +45,33 @@ fn register(req: &mut Request) -> IronResult<Response> {
         }
     };
 
-    let local_ip = body.local_ip;
-    let tunnel_url = body.tunnel_url;
+    let domain = body.domain;
+
     // And the public IP from the socket.
     let public_ip = format!("{}", req.remote_addr.ip());
+
+    let tunnel_configured = body.tunnel_configured;
 
     // Get the current number of seconds since epoch.
     let now = Db::seconds_from_epoch();
 
-    info!("POST /register public_ip={} local_ip={} tunnel_url={} time is {}",
-          public_ip, local_ip, tunnel_url.clone().unwrap(), now);
+    info!("POST /register public_ip={} domain={} tunnel_configured={} time is {}",
+          public_ip, domain, tunnel_configured, now);
 
     // Save this registration in the database.
-    // If we already have the same (local, tunnel, public) match, update it,
+    // If we already have the same (public, domain) match, update it,
     // if not create a new match.
     let db = Db::new();
     match db.find(
-        FindFilter::PublicAndLocalIp(public_ip.clone(), local_ip.clone())
+        FindFilter::PublicIpAndFingerprintDomain(public_ip.clone(), domain.clone())
     ) {
         Ok(rvect) => {
             // If the vector is empty, create a new record, if not update
             // the existing one with the new timestamp.
             let record = Record {
                 public_ip: public_ip,
-                local_ip: local_ip,
-                tunnel_url: tunnel_url,
+                domain: domain,
+                tunnel_configured: tunnel_configured,
                 timestamp: now,
             };
 
@@ -78,18 +81,20 @@ fn register(req: &mut Request) -> IronResult<Response> {
                 db.update(record)
             };
 
-            if let Err(_) = result {
+            if let Err(e) = result {
+                error!("Error: {:?}", e);
                 return EndpointError::with(status::InternalServerError, 501)
             }
         },
         Err(_) => {
             let record = Record {
                 public_ip: public_ip,
-                local_ip: local_ip,
-                tunnel_url: tunnel_url,
+                domain: domain,
+                tunnel_configured: tunnel_configured,
                 timestamp: now,
             };
-            if let Err(_) = db.add(record) {
+            if let Err(e) = db.add(record) {
+                error!("Error: {:?}", e);
                 return EndpointError::with(status::InternalServerError, 501)
             }
         }
