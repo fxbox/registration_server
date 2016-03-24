@@ -35,8 +35,8 @@ function doDiscovery() {
       content = "<p>No FoxBox available!</p>";
     } else {
       data.forEach(item => {
-        content += `<p>FoxBox found at ${item.local_ip}</p>`;
-        loadJSON("GET", `http://${item.local_ip}:3000/services/list.json`).then(list => {
+        content += `<p>FoxBox found at ${item.domain}</p>`;
+        loadJSON("GET", `http://local.${item.domain}:3000/services/list.json`).then(list => {
           console.log("Service list: " + JSON.stringify(list));
           let html = "<ul>";
           for (let s in list) {
