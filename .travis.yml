@@ -1,3 +1,14 @@
+sudo: false
 language: rust
+
+# run builds for all the trains (and more)
 rust:
-    - nightly-2016-12-16
+  - nightly
+
+# the main build
+script:
+  - |
+      cd server &&
+      cargo build &&
+      cargo test
+  
